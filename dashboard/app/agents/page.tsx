@@ -6,6 +6,8 @@ import { AgentHealth, AgentRun } from '@/lib/types';
 import AgentStatusCard from '@/components/AgentStatusCard';
 import { formatDistanceToNow } from 'date-fns';
 
+const SCHEDULER_API = process.env.NEXT_PUBLIC_SCHEDULER_API_URL || '';
+
 export default function AgentHealthPage() {
   const [healthData, setHealthData] = useState<AgentHealth[]>([]);
   const [recentRuns, setRecentRuns] = useState<AgentRun[]>([]);
@@ -13,13 +15,33 @@ export default function AgentHealthPage() {
 
   useEffect(() => {
     async function fetchData() {
+      // Fetch schedule data from Railway scheduler API
+      let scheduleMap: Record<string, { next_run?: string; cron?: string }> = {};
+      if (SCHEDULER_API) {
+        try {
+          const resp = await fetch(`${SCHEDULER_API}/agents`);
+          if (resp.ok) {
+            const body = await resp.json();
+            for (const a of body.agents || []) {
+              scheduleMap[a.name] = { next_run: a.next_run, cron: a.cron };
+            }
+          }
+        } catch {
+          // Scheduler API may be unreachable — continue without schedule data
+        }
+      }
+
       // Try the view first, fall back to client-side aggregation
       const { data: healthView, error: healthError } = await supabase
         .from('v_agent_health')
         .select('*');
 
       if (!healthError && healthView && healthView.length > 0) {
-        setHealthData(healthView as AgentHealth[]);
+        const merged = (healthView as AgentHealth[]).map((h) => ({
+          ...h,
+          ...scheduleMap[h.agent_name],
+        }));
+        setHealthData(merged);
       } else {
         // Fallback: aggregate from agent_runs
         const { data: runs } = await supabase
@@ -60,7 +82,11 @@ export default function AgentHealthPage() {
             }
           }
 
-          setHealthData(Array.from(agentMap.values()));
+          const merged = Array.from(agentMap.values()).map((h) => ({
+            ...h,
+            ...scheduleMap[h.agent_name],
+          }));
+          setHealthData(merged);
         }
       }
 

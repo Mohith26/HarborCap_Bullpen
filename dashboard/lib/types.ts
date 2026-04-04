@@ -35,6 +35,8 @@ export interface AgentHealth {
   last_run: string;
   avg_duration_seconds: number;
   total_new_records: number;
+  next_run?: string;
+  cron?: string;
 }
 
 export interface MaterialPrice {
