@@ -1,19 +1,24 @@
 """
 Bullpen Agent Scheduler
 -----------------------
-Long-running process that executes all agents on their configured schedules.
-Uses APScheduler with CronTrigger (all times in US/Central).
+Long-running process that executes all agents on their configured schedules
+AND exposes an HTTP API for on-demand agent triggers from the dashboard.
 
 Usage:
-    python scheduler.py              # Start the scheduler (runs forever)
+    python scheduler.py              # Start scheduler + API server
     python scheduler.py --run-all    # Run all agents once immediately, then exit
 """
 
 import logging
+import os
 import sys
+import threading
 
-from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
 
 from agents.biz_registration import biz_registration_agent
 from agents.building_permits import building_permits_agent
@@ -42,62 +47,68 @@ logger = logging.getLogger("bullpen.scheduler")
 
 TIMEZONE = "US/Central"
 
-# (flow_function, cron_expression, agent_id)
-SCHEDULE = [
-    # ── Hourly ──────────────────────────────────────────────
-    (corporate_relocations_agent, "0 * * * *", "corporate_relocations"),
+# Map of agent_name -> (flow_function, cron_expression)
+AGENTS = {
+    "corporate_relocations": (corporate_relocations_agent, "0 * * * *"),
+    "biz_registration":      (biz_registration_agent,      "0 6 * * *"),
+    "building_permits":      (building_permits_agent,      "10 6 * * *"),
+    "job_demand":            (job_demand_agent,            "20 6 * * *"),
+    "zoning_changes":        (zoning_changes_agent,        "30 6 * * *"),
+    "environmental_risk":    (environmental_risk_agent,    "0 7 * * *"),
+    "flood_risk":            (flood_risk_agent,            "15 7 * * *"),
+    "txdot_infra":           (txdot_infra_agent,           "0 5 * * 1"),
+    "toll_traffic":          (toll_traffic_agent,          "15 5 * * 1"),
+    "census_demographics":   (census_demographics_agent,   "30 5 * * 1"),
+    "materials_price":       (materials_price_agent,       "0 4 1 * *"),
+    "freight_volume":        (freight_volume_agent,        "15 4 1 * *"),
+    "ercot_load":            (ercot_load_agent,            "30 4 1 * *"),
+    "sales_tax_revenue":     (sales_tax_revenue_agent,     "45 4 1 * *"),
+    "census_migration":      (census_migration_agent,      "0 4 15 * *"),
+    "irs_migration":         (irs_migration_agent,         "15 4 15 * *"),
+    "hud_vacancy":           (hud_vacancy_agent,           "30 4 15 * *"),
+}
 
-    # ── Daily 6 AM CT (staggered 10 min apart) ─────────────
-    (biz_registration_agent, "0 6 * * *", "biz_registration"),
-    (building_permits_agent, "10 6 * * *", "building_permits"),
-    (job_demand_agent, "20 6 * * *", "job_demand"),
-    (zoning_changes_agent, "30 6 * * *", "zoning_changes"),
-
-    # ── Daily 7 AM CT ──────────────────────────────────────
-    (environmental_risk_agent, "0 7 * * *", "environmental_risk"),
-    (flood_risk_agent, "15 7 * * *", "flood_risk"),
-
-    # ── Weekly Monday 5 AM CT ──────────────────────────────
-    (txdot_infra_agent, "0 5 * * 1", "txdot_infra"),
-    (toll_traffic_agent, "15 5 * * 1", "toll_traffic"),
-    (census_demographics_agent, "30 5 * * 1", "census_demographics"),
-
-    # ── Monthly 1st at 4 AM CT ─────────────────────────────
-    (materials_price_agent, "0 4 1 * *", "materials_price"),
-    (freight_volume_agent, "15 4 1 * *", "freight_volume"),
-    (ercot_load_agent, "30 4 1 * *", "ercot_load"),
-    (sales_tax_revenue_agent, "45 4 1 * *", "sales_tax_revenue"),
-
-    # ── Monthly 15th at 4 AM CT ────────────────────────────
-    (census_migration_agent, "0 4 15 * *", "census_migration"),
-    (irs_migration_agent, "15 4 15 * *", "irs_migration"),
-    (hud_vacancy_agent, "30 4 15 * *", "hud_vacancy"),
-]
+# Track which agents are currently running
+_running: set[str] = set()
+_lock = threading.Lock()
 
 
 def run_agent(agent_fn, name: str):
     """Wrapper that catches exceptions so the scheduler keeps running."""
+    with _lock:
+        if name in _running:
+            logger.warning(f"⏭ Agent {name} already running, skipping")
+            return
+        _running.add(name)
+
     logger.info(f"▶ Starting agent: {name}")
     try:
         result = agent_fn()
         logger.info(f"✓ Agent {name} completed: {result}")
     except Exception as e:
         logger.error(f"✗ Agent {name} failed: {e}", exc_info=True)
+    finally:
+        with _lock:
+            _running.discard(name)
 
 
 def run_all_once():
     """Run every agent once sequentially, then exit."""
-    logger.info(f"Running all {len(SCHEDULE)} agents once...")
-    for agent_fn, _, name in SCHEDULE:
+    logger.info(f"Running all {len(AGENTS)} agents once...")
+    for name, (agent_fn, _) in AGENTS.items():
         run_agent(agent_fn, name)
     logger.info("All agents completed.")
 
 
-def start_scheduler():
-    """Register all agents with APScheduler and block forever."""
-    scheduler = BlockingScheduler(timezone=TIMEZONE)
+# ---------------------------------------------------------------------------
+# APScheduler
+# ---------------------------------------------------------------------------
+scheduler = BackgroundScheduler(timezone=TIMEZONE)
 
-    for agent_fn, cron_expr, name in SCHEDULE:
+
+def start_scheduler():
+    """Register all agents with APScheduler cron triggers."""
+    for name, (agent_fn, cron_expr) in AGENTS.items():
         scheduler.add_job(
             run_agent,
             CronTrigger.from_crontab(cron_expr, timezone=TIMEZONE),
@@ -109,12 +120,69 @@ def start_scheduler():
         )
         logger.info(f"  Registered: {name:30s} → {cron_expr}")
 
-    logger.info(f"Scheduler started with {len(SCHEDULE)} agents. Waiting for triggers...")
     scheduler.start()
+    logger.info(f"Scheduler started with {len(AGENTS)} agents.")
 
 
+# ---------------------------------------------------------------------------
+# FastAPI HTTP API for on-demand triggers
+# ---------------------------------------------------------------------------
+app = FastAPI(title="Bullpen Scheduler API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "agents": len(AGENTS), "running": list(_running)}
+
+
+@app.get("/agents")
+def list_agents():
+    """List all agents with their schedule and running status."""
+    result = []
+    for name, (_, cron_expr) in AGENTS.items():
+        job = scheduler.get_job(name)
+        next_run = str(job.next_run_time) if job and job.next_run_time else None
+        result.append({
+            "name": name,
+            "cron": cron_expr,
+            "next_run": next_run,
+            "is_running": name in _running,
+        })
+    return {"agents": result}
+
+
+@app.post("/agents/{agent_name}/run")
+def trigger_agent(agent_name: str):
+    """Trigger an agent to run immediately in a background thread."""
+    if agent_name not in AGENTS:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_name}")
+
+    with _lock:
+        if agent_name in _running:
+            raise HTTPException(status_code=409, detail=f"Agent {agent_name} is already running")
+
+    agent_fn, _ = AGENTS[agent_name]
+    thread = threading.Thread(target=run_agent, args=[agent_fn, agent_name], daemon=True)
+    thread.start()
+
+    return {"status": "started", "agent": agent_name}
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     if "--run-all" in sys.argv:
         run_all_once()
     else:
         start_scheduler()
+        port = int(os.environ.get("PORT", 8000))
+        logger.info(f"Starting API server on port {port}")
+        uvicorn.run(app, host="0.0.0.0", port=port)

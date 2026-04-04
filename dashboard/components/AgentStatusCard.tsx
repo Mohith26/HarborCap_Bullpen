@@ -1,23 +1,42 @@
 'use client';
 
+import { useState } from 'react';
 import { AgentHealth } from '@/lib/types';
 import { formatDistanceToNow } from 'date-fns';
 
-const agentDisplayNames: Record<string, string> = {
-  permit_scanner: 'Permit Scanner',
-  listing_tracker: 'Listing Tracker',
-  demographic_monitor: 'Demographic Monitor',
-  materials_watcher: 'Materials Watcher',
-  court_monitor: 'Court Monitor',
-};
+const SCHEDULER_API = process.env.NEXT_PUBLIC_SCHEDULER_API_URL || '';
 
 export default function AgentStatusCard({ agent }: { agent: AgentHealth }) {
+  const [triggering, setTriggering] = useState(false);
+  const [triggerResult, setTriggerResult] = useState<'idle' | 'started' | 'error'>('idle');
+
+  const handleRunNow = async () => {
+    if (!SCHEDULER_API) {
+      setTriggerResult('error');
+      setTimeout(() => setTriggerResult('idle'), 3000);
+      return;
+    }
+    setTriggering(true);
+    setTriggerResult('idle');
+    try {
+      const resp = await fetch(`${SCHEDULER_API}/agents/${agent.agent_name}/run`, { method: 'POST' });
+      if (resp.ok) {
+        setTriggerResult('started');
+      } else {
+        setTriggerResult('error');
+      }
+    } catch {
+      setTriggerResult('error');
+    }
+    setTriggering(false);
+    setTimeout(() => setTriggerResult('idle'), 4000);
+  };
   const successRate = agent.total_runs > 0 ? Math.round((agent.successful / agent.total_runs) * 100) : 0;
   const lastRunAgo = agent.last_run
     ? formatDistanceToNow(new Date(agent.last_run), { addSuffix: true })
     : 'Never';
   const isHealthy = agent.failed === 0 || successRate >= 80;
-  const displayName = agentDisplayNames[agent.agent_name] || agent.agent_name.replace(/_/g, ' ');
+  const displayName = agent.agent_name.replace(/_/g, ' ');
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 hover:border-gray-700 transition-colors">
@@ -84,10 +103,26 @@ export default function AgentStatusCard({ agent }: { agent: AgentHealth }) {
         </div>
       </div>
 
-      {/* Last run */}
-      <p className="text-[11px] text-gray-500 mt-2">
-        Last run: <span className="text-gray-400">{lastRunAgo}</span>
-      </p>
+      {/* Last run + Run Now */}
+      <div className="flex items-center justify-between mt-3">
+        <p className="text-[11px] text-gray-500">
+          Last run: <span className="text-gray-400">{lastRunAgo}</span>
+        </p>
+        <button
+          onClick={handleRunNow}
+          disabled={triggering || !SCHEDULER_API}
+          className={`text-[11px] font-medium px-3 py-1 rounded border transition-colors ${
+            triggerResult === 'started'
+              ? 'bg-green-900/40 text-green-400 border-green-800'
+              : triggerResult === 'error'
+              ? 'bg-red-900/40 text-red-400 border-red-800'
+              : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700 hover:text-white'
+          } disabled:opacity-50 disabled:cursor-not-allowed`}
+          title={!SCHEDULER_API ? 'Set NEXT_PUBLIC_SCHEDULER_API_URL to enable' : `Trigger ${agent.agent_name} now`}
+        >
+          {triggering ? 'Starting...' : triggerResult === 'started' ? 'Started' : triggerResult === 'error' ? 'Failed' : 'Run Now'}
+        </button>
+      </div>
     </div>
   );
 }
