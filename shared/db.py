@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+import httpx
 from supabase import Client, create_client
 
 from shared.config import SUPABASE_KEY, SUPABASE_URL
@@ -16,14 +17,29 @@ _client: Optional[Client] = None
 
 
 def get_client() -> Client:
-    """Return a singleton Supabase client."""
+    """Return a singleton Supabase client.
+
+    Forces HTTP/1.1 to avoid HTTP/2 StreamReset errors in containerized
+    environments (Railway, Docker, etc.).
+    """
     global _client
     if _client is None:
         if not SUPABASE_URL or not SUPABASE_KEY:
             raise RuntimeError(
                 "SUPABASE_URL and SUPABASE_KEY must be set in the environment."
             )
-        _client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        _client = create_client(
+            SUPABASE_URL,
+            SUPABASE_KEY,
+            options={"postgrest_client_timeout": 30},
+        )
+        # Force HTTP/1.1 on the PostgREST client to avoid HTTP/2 stream resets
+        _client.postgrest.session = httpx.Client(
+            base_url=f"{SUPABASE_URL}/rest/v1",
+            headers=_client.postgrest.session.headers,
+            http2=False,
+            timeout=30.0,
+        )
     return _client
 
 
