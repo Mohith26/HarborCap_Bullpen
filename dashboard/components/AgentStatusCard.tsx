@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { AgentHealth } from '@/lib/types';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -18,38 +18,80 @@ function cronToLabel(cron: string): string {
   return cron;
 }
 
-export default function AgentStatusCard({ agent }: { agent: AgentHealth }) {
-  const [triggering, setTriggering] = useState(false);
-  const [triggerStatus, setTriggerStatus] = useState<'idle' | 'started' | 'running' | 'error'>('idle');
+interface Props {
+  agent: AgentHealth;
+  onRunComplete?: () => void;
+}
+
+export default function AgentStatusCard({ agent, onRunComplete }: Props) {
+  const [triggerStatus, setTriggerStatus] = useState<'idle' | 'starting' | 'running' | 'completed' | 'already_running' | 'error'>('idle');
   const [triggerMessage, setTriggerMessage] = useState('');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
 
   const handleRunNow = async () => {
     if (!SCHEDULER_API) return;
-    setTriggering(true);
-    setTriggerStatus('idle');
+    stopPolling();
+    setTriggerStatus('starting');
     setTriggerMessage('');
 
     try {
       const resp = await fetch(`${SCHEDULER_API}/agents/${agent.agent_name}/run`, { method: 'POST' });
 
       if (resp.ok) {
-        setTriggerStatus('started');
-        setTriggerMessage('Agent triggered');
-      } else if (resp.status === 409) {
         setTriggerStatus('running');
+        setTriggerMessage('Agent running...');
+
+        // Poll for completion every 3 seconds, max 5 minutes
+        let polls = 0;
+        pollRef.current = setInterval(async () => {
+          polls++;
+          if (polls > 100) {
+            stopPolling();
+            setTriggerStatus('completed');
+            setTriggerMessage('Still running (check logs)');
+            setTimeout(() => { setTriggerStatus('idle'); setTriggerMessage(''); }, 5000);
+            onRunComplete?.();
+            return;
+          }
+          try {
+            const statusResp = await fetch(`${SCHEDULER_API}/agents/${agent.agent_name}/status`);
+            if (statusResp.ok) {
+              const { is_running } = await statusResp.json();
+              if (!is_running) {
+                stopPolling();
+                setTriggerStatus('completed');
+                setTriggerMessage('Run complete');
+                onRunComplete?.();
+                setTimeout(() => { setTriggerStatus('idle'); setTriggerMessage(''); }, 4000);
+              }
+            }
+          } catch {
+            // Poll failed — keep trying
+          }
+        }, 3000);
+
+      } else if (resp.status === 409) {
+        setTriggerStatus('already_running');
         setTriggerMessage('Already running');
+        setTimeout(() => { setTriggerStatus('idle'); setTriggerMessage(''); }, 4000);
       } else {
         const body = await resp.json().catch(() => ({}));
         setTriggerStatus('error');
         setTriggerMessage(body.detail || `Error ${resp.status}`);
+        setTimeout(() => { setTriggerStatus('idle'); setTriggerMessage(''); }, 5000);
       }
     } catch {
       setTriggerStatus('error');
       setTriggerMessage('Cannot reach scheduler');
+      setTimeout(() => { setTriggerStatus('idle'); setTriggerMessage(''); }, 5000);
     }
-
-    setTriggering(false);
-    setTimeout(() => { setTriggerStatus('idle'); setTriggerMessage(''); }, 5000);
   };
 
   const successRate = agent.total_runs > 0 ? Math.round((agent.successful / agent.total_runs) * 100) : 0;
@@ -65,17 +107,21 @@ export default function AgentStatusCard({ agent }: { agent: AgentHealth }) {
   const scheduleLabel = agent.cron ? cronToLabel(agent.cron) : null;
 
   const buttonColor =
-    triggerStatus === 'started' ? 'bg-green-900/40 text-green-400 border-green-800' :
-    triggerStatus === 'running' ? 'bg-yellow-900/40 text-yellow-400 border-yellow-800' :
+    triggerStatus === 'completed' ? 'bg-green-900/40 text-green-400 border-green-800' :
+    triggerStatus === 'running' ? 'bg-blue-900/40 text-blue-400 border-blue-800 animate-pulse' :
+    triggerStatus === 'already_running' ? 'bg-yellow-900/40 text-yellow-400 border-yellow-800' :
     triggerStatus === 'error' ? 'bg-red-900/40 text-red-400 border-red-800' :
     'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700 hover:text-white';
 
   const buttonText =
-    triggering ? 'Starting...' :
-    triggerStatus === 'started' ? 'Started' :
-    triggerStatus === 'running' ? 'Already Running' :
+    triggerStatus === 'starting' ? 'Starting...' :
+    triggerStatus === 'running' ? 'Running...' :
+    triggerStatus === 'completed' ? 'Completed' :
+    triggerStatus === 'already_running' ? 'Already Running' :
     triggerStatus === 'error' ? 'Failed' :
     'Run Now';
+
+  const isDisabled = triggerStatus === 'starting' || triggerStatus === 'running' || !SCHEDULER_API;
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 hover:border-gray-700 transition-colors">
@@ -154,7 +200,12 @@ export default function AgentStatusCard({ agent }: { agent: AgentHealth }) {
         )}
 
         {triggerMessage && (
-          <p className={`text-[10px] ${triggerStatus === 'started' ? 'text-green-400' : triggerStatus === 'running' ? 'text-yellow-400' : 'text-red-400'}`}>
+          <p className={`text-[10px] ${
+            triggerStatus === 'completed' ? 'text-green-400' :
+            triggerStatus === 'running' ? 'text-blue-400' :
+            triggerStatus === 'already_running' ? 'text-yellow-400' :
+            'text-red-400'
+          }`}>
             {triggerMessage}
           </p>
         )}
@@ -163,7 +214,7 @@ export default function AgentStatusCard({ agent }: { agent: AgentHealth }) {
       {/* Run Now button */}
       <button
         onClick={handleRunNow}
-        disabled={triggering || !SCHEDULER_API}
+        disabled={isDisabled}
         className={`w-full mt-3 text-[11px] font-medium px-3 py-1.5 rounded border transition-colors ${buttonColor} disabled:opacity-40 disabled:cursor-not-allowed`}
         title={!SCHEDULER_API ? 'Set NEXT_PUBLIC_SCHEDULER_API_URL in env to enable' : `Trigger ${agent.agent_name} now`}
       >

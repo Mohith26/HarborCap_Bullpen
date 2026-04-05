@@ -77,16 +77,22 @@ def run_agent(agent_fn, name: str):
     """Wrapper that catches exceptions so the scheduler keeps running."""
     with _lock:
         if name in _running:
-            logger.warning(f"⏭ Agent {name} already running, skipping")
+            logger.warning(f"Agent {name} already running, skipping")
             return
         _running.add(name)
 
-    logger.info(f"▶ Starting agent: {name}")
+    logger.info(f"Starting agent: {name}")
     try:
         result = agent_fn()
-        logger.info(f"✓ Agent {name} completed: {result}")
+        logger.info(f"Agent {name} completed: {result}")
     except Exception as e:
-        logger.error(f"✗ Agent {name} failed: {e}", exc_info=True)
+        logger.error(f"Agent {name} failed: {e}", exc_info=True)
+        # Also log to Supabase so failures are visible in the dashboard
+        try:
+            from shared.db import log_agent_run
+            log_agent_run(agent_name=name, status="failed", error_message=str(e))
+        except Exception:
+            pass
     finally:
         with _lock:
             _running.discard(name)
@@ -156,6 +162,22 @@ def list_agents():
             "is_running": name in _running,
         })
     return {"agents": result}
+
+
+@app.post("/test")
+def test_write():
+    """Write a test row to agent_runs to verify Supabase connectivity from Railway."""
+    from shared.db import log_agent_run
+    log_agent_run(agent_name="test", status="success", records_pulled=0, records_new=0)
+    return {"status": "ok", "message": "Test row written to agent_runs"}
+
+
+@app.get("/agents/{agent_name}/status")
+def agent_status(agent_name: str):
+    """Check if an agent is currently running."""
+    if agent_name not in AGENTS:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_name}")
+    return {"name": agent_name, "is_running": agent_name in _running}
 
 
 @app.post("/agents/{agent_name}/run")

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { AgentHealth, AgentRun } from '@/lib/types';
 import AgentStatusCard from '@/components/AgentStatusCard';
@@ -13,99 +13,99 @@ export default function AgentHealthPage() {
   const [recentRuns, setRecentRuns] = useState<AgentRun[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    async function fetchData() {
-      // Fetch schedule data from Railway scheduler API
-      let scheduleMap: Record<string, { next_run?: string; cron?: string }> = {};
-      if (SCHEDULER_API) {
-        try {
-          const resp = await fetch(`${SCHEDULER_API}/agents`);
-          if (resp.ok) {
-            const body = await resp.json();
-            for (const a of body.agents || []) {
-              scheduleMap[a.name] = { next_run: a.next_run, cron: a.cron };
-            }
+  const fetchData = useCallback(async () => {
+    // Fetch schedule data from Railway scheduler API
+    let scheduleMap: Record<string, { next_run?: string; cron?: string }> = {};
+    if (SCHEDULER_API) {
+      try {
+        const resp = await fetch(`${SCHEDULER_API}/agents`);
+        if (resp.ok) {
+          const body = await resp.json();
+          for (const a of body.agents || []) {
+            scheduleMap[a.name] = { next_run: a.next_run, cron: a.cron };
           }
-        } catch {
-          // Scheduler API may be unreachable — continue without schedule data
         }
+      } catch {
+        // Scheduler API may be unreachable — continue without schedule data
       }
+    }
 
-      // Try the view first, fall back to client-side aggregation
-      const { data: healthView, error: healthError } = await supabase
-        .from('v_agent_health')
-        .select('*');
+    // Try the view first, fall back to client-side aggregation
+    const { data: healthView, error: healthError } = await supabase
+      .from('v_agent_health')
+      .select('*');
 
-      if (!healthError && healthView && healthView.length > 0) {
-        const merged = (healthView as AgentHealth[]).map((h) => ({
+    if (!healthError && healthView && healthView.length > 0) {
+      const merged = (healthView as AgentHealth[]).map((h) => ({
+        ...h,
+        ...scheduleMap[h.agent_name],
+      }));
+      setHealthData(merged);
+    } else {
+      // Fallback: aggregate from agent_runs
+      const { data: runs } = await supabase
+        .from('agent_runs')
+        .select('*')
+        .order('started_at', { ascending: false });
+
+      if (runs && runs.length > 0) {
+        const agentMap = new Map<string, AgentHealth>();
+
+        for (const run of runs as AgentRun[]) {
+          const existing = agentMap.get(run.agent_name);
+          const duration = run.started_at && run.finished_at
+            ? (new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000
+            : 0;
+
+          if (!existing) {
+            agentMap.set(run.agent_name, {
+              agent_name: run.agent_name,
+              total_runs: 1,
+              successful: run.status === 'success' ? 1 : 0,
+              failed: run.status === 'failed' ? 1 : 0,
+              last_run: run.started_at,
+              avg_duration_seconds: duration,
+              total_new_records: run.records_new || 0,
+            });
+          } else {
+            existing.total_runs += 1;
+            if (run.status === 'success') existing.successful += 1;
+            if (run.status === 'failed') existing.failed += 1;
+            if (new Date(run.started_at) > new Date(existing.last_run)) {
+              existing.last_run = run.started_at;
+            }
+            existing.avg_duration_seconds =
+              (existing.avg_duration_seconds * (existing.total_runs - 1) + duration) /
+              existing.total_runs;
+            existing.total_new_records += run.records_new || 0;
+          }
+        }
+
+        const merged = Array.from(agentMap.values()).map((h) => ({
           ...h,
           ...scheduleMap[h.agent_name],
         }));
         setHealthData(merged);
-      } else {
-        // Fallback: aggregate from agent_runs
-        const { data: runs } = await supabase
-          .from('agent_runs')
-          .select('*')
-          .order('started_at', { ascending: false });
-
-        if (runs && runs.length > 0) {
-          const agentMap = new Map<string, AgentHealth>();
-
-          for (const run of runs as AgentRun[]) {
-            const existing = agentMap.get(run.agent_name);
-            const duration = run.started_at && run.finished_at
-              ? (new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000
-              : 0;
-
-            if (!existing) {
-              agentMap.set(run.agent_name, {
-                agent_name: run.agent_name,
-                total_runs: 1,
-                successful: run.status === 'success' ? 1 : 0,
-                failed: run.status === 'failed' ? 1 : 0,
-                last_run: run.started_at,
-                avg_duration_seconds: duration,
-                total_new_records: run.records_new || 0,
-              });
-            } else {
-              existing.total_runs += 1;
-              if (run.status === 'success') existing.successful += 1;
-              if (run.status === 'failed') existing.failed += 1;
-              if (new Date(run.started_at) > new Date(existing.last_run)) {
-                existing.last_run = run.started_at;
-              }
-              existing.avg_duration_seconds =
-                (existing.avg_duration_seconds * (existing.total_runs - 1) + duration) /
-                existing.total_runs;
-              existing.total_new_records += run.records_new || 0;
-            }
-          }
-
-          const merged = Array.from(agentMap.values()).map((h) => ({
-            ...h,
-            ...scheduleMap[h.agent_name],
-          }));
-          setHealthData(merged);
-        }
       }
-
-      // Recent runs
-      const { data: recent } = await supabase
-        .from('agent_runs')
-        .select('*')
-        .order('started_at', { ascending: false })
-        .limit(10);
-
-      if (recent) {
-        setRecentRuns(recent as AgentRun[]);
-      }
-
-      setLoading(false);
     }
 
-    fetchData();
+    // Recent runs
+    const { data: recent } = await supabase
+      .from('agent_runs')
+      .select('*')
+      .order('started_at', { ascending: false })
+      .limit(10);
+
+    if (recent) {
+      setRecentRuns(recent as AgentRun[]);
+    }
+
+    setLoading(false);
   }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   const statusDot = (status: string) => {
     const color = status === 'success' ? 'bg-green-500' : status === 'failed' ? 'bg-red-500' : 'bg-yellow-500';
@@ -153,7 +153,7 @@ export default function AgentHealthPage() {
       {healthData.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
           {healthData.map((agent) => (
-            <AgentStatusCard key={agent.agent_name} agent={agent} />
+            <AgentStatusCard key={agent.agent_name} agent={agent} onRunComplete={fetchData} />
           ))}
         </div>
       ) : (
