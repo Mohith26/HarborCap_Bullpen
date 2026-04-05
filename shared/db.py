@@ -28,15 +28,12 @@ def get_client() -> Client:
             raise RuntimeError(
                 "SUPABASE_URL and SUPABASE_KEY must be set in the environment."
             )
-        _client = create_client(
-            SUPABASE_URL,
-            SUPABASE_KEY,
-            options={"postgrest_client_timeout": 30},
-        )
+        _client = create_client(SUPABASE_URL, SUPABASE_KEY)
         # Force HTTP/1.1 on the PostgREST client to avoid HTTP/2 stream resets
+        old_session = _client.postgrest.session
         _client.postgrest.session = httpx.Client(
-            base_url=f"{SUPABASE_URL}/rest/v1",
-            headers=_client.postgrest.session.headers,
+            base_url=old_session.base_url,
+            headers=dict(old_session.headers),
             http2=False,
             timeout=30.0,
         )
