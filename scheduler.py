@@ -167,9 +167,27 @@ def list_agents():
 @app.post("/test")
 def test_write():
     """Write a test row to agent_runs to verify Supabase connectivity from Railway."""
-    from shared.db import log_agent_run
-    log_agent_run(agent_name="test", status="success", records_pulled=0, records_new=0)
-    return {"status": "ok", "message": "Test row written to agent_runs"}
+    import traceback
+    try:
+        from shared.db import log_agent_run
+        log_agent_run(agent_name="test", status="success", records_pulled=0, records_new=0)
+        return {"status": "ok", "message": "Test row written to agent_runs"}
+    except Exception as e:
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/debug/env")
+def debug_env():
+    """Check which env vars are set (values redacted)."""
+    import os
+    keys = [
+        "SUPABASE_URL", "SUPABASE_KEY", "SEED_MODE",
+        "FRED_API_KEY", "GOOGLE_MAPS_API_KEY", "CENSUS_API_KEY",
+        "TX_COMPTROLLER_SIFT_KEY", "TX_COMPTROLLER_TAX_KEY",
+        "ERCOT_SUBSCRIPTION_KEY", "ERCOT_USERNAME", "ERCOT_PASSWORD",
+        "HUD_API_TOKEN", "PORT",
+    ]
+    return {k: ("set" if os.environ.get(k) else "MISSING") for k in keys}
 
 
 @app.get("/agents/{agent_name}/status")
