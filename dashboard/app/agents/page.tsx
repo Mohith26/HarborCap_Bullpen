@@ -107,19 +107,18 @@ export default function AgentHealthPage() {
     fetchData();
   }, [fetchData]);
 
-  const statusDot = (status: string) => {
-    const color = status === 'success' ? 'bg-green-500' : status === 'failed' ? 'bg-red-500' : 'bg-yellow-500';
-    return <span className={`w-2 h-2 rounded-full inline-block ${color}`} />;
-  };
-
   const statusBadge = (status: string) => {
-    const styles: Record<string, string> = {
-      success: 'bg-green-900/40 text-green-400 border-green-800',
-      failed: 'bg-red-900/40 text-red-400 border-red-800',
-      running: 'bg-yellow-900/40 text-yellow-400 border-yellow-800',
+    const styles: Record<string, { bg: string; color: string; border: string }> = {
+      success: { bg: 'rgba(91, 217, 168, 0.12)', color: '#5BD9A8', border: 'rgba(91, 217, 168, 0.35)' },
+      failed: { bg: 'rgba(229, 75, 75, 0.12)', color: '#FF8585', border: 'rgba(229, 75, 75, 0.35)' },
+      running: { bg: 'rgba(91, 156, 255, 0.12)', color: '#8DB8FF', border: 'rgba(91, 156, 255, 0.35)' },
     };
+    const s = styles[status] || styles.running;
     return (
-      <span className={`text-[11px] font-medium px-2 py-0.5 rounded border ${styles[status] || styles.running}`}>
+      <span
+        className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border"
+        style={{ background: s.bg, color: s.color, borderColor: s.border }}
+      >
         {status}
       </span>
     );
@@ -127,104 +126,106 @@ export default function AgentHealthPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <div className="flex items-center gap-3 text-gray-500">
-          <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-          Loading agent health data...
+      <div className="flex items-center justify-center py-32">
+        <div className="flex items-center gap-3 text-text-tertiary">
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--hc-peach)] hc-pulse" />
+          Loading agent health…
         </div>
       </div>
     );
   }
 
   return (
-    <div>
+    <div className="space-y-7">
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white">Agent Health</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Monitor agent performance and run history
+      <header>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--hc-peach)] mb-1.5">
+          Agents
         </p>
-      </div>
+        <h1 className="text-3xl font-semibold tracking-tight text-text-primary leading-tight">
+          Agent health
+        </h1>
+        <p className="text-[13px] text-text-secondary mt-1">
+          Performance and execution history for all 17 autonomous agents
+        </p>
+      </header>
 
       {/* Agent cards grid */}
       {healthData.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {healthData.map((agent) => (
             <AgentStatusCard key={agent.agent_name} agent={agent} onRunComplete={fetchData} />
           ))}
         </div>
       ) : (
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-8 text-center mb-8">
-          <p className="text-gray-500 text-sm">No agent health data available</p>
-          <p className="text-gray-600 text-xs mt-1">Agent runs will appear here once agents start executing</p>
+        <div className="surface p-12 text-center">
+          <p className="text-text-secondary text-sm">No agent health data available</p>
+          <p className="text-text-tertiary text-xs mt-1">Agent runs will appear here once agents start executing</p>
         </div>
       )}
 
       {/* Recent Runs Table */}
-      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-800">
-          <h2 className="text-sm font-semibold text-white">Recent Runs</h2>
-          <p className="text-[11px] text-gray-500">Last 10 agent executions</p>
+      <section>
+        <h2 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary mb-3">
+          Recent runs · last 10 executions
+        </h2>
+        <div className="surface overflow-hidden">
+          {recentRuns.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-divider text-[9px] text-text-tertiary uppercase tracking-wider">
+                    <th className="text-left px-4 py-3 font-semibold">Status</th>
+                    <th className="text-left px-4 py-3 font-semibold">Agent</th>
+                    <th className="text-left px-4 py-3 font-semibold">Started</th>
+                    <th className="text-right px-4 py-3 font-semibold">Duration</th>
+                    <th className="text-right px-4 py-3 font-semibold">Pulled</th>
+                    <th className="text-right px-4 py-3 font-semibold">New</th>
+                    <th className="text-left px-4 py-3 font-semibold">Error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentRuns.map((run) => {
+                    const duration =
+                      run.started_at && run.finished_at
+                        ? ((new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000).toFixed(1)
+                        : '—';
+                    const startedAgo = formatDistanceToNow(new Date(run.started_at), { addSuffix: true });
+
+                    return (
+                      <tr key={run.id} className="border-b border-divider/50 hover:bg-[var(--bg-elevated-hover)] transition-colors">
+                        <td className="px-4 py-2.5">{statusBadge(run.status)}</td>
+                        <td className="px-4 py-2.5">
+                          <span className="text-[12.5px] text-text-primary capitalize">
+                            {run.agent_name.replace(/_/g, ' ')}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 text-[11.5px] text-text-tertiary">{startedAgo}</td>
+                        <td className="px-4 py-2.5 text-right text-[11.5px] text-text-secondary tabular-nums">
+                          {duration === '—' ? '—' : `${duration}s`}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-[11.5px] text-text-secondary tabular-nums">
+                          {run.records_pulled.toLocaleString()}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-[11.5px] text-text-primary font-medium tabular-nums">
+                          {run.records_new.toLocaleString()}
+                        </td>
+                        <td className="px-4 py-2.5 text-[10.5px] text-[#FF8585] max-w-[200px] truncate">
+                          {run.error_message || '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="px-4 py-12 text-center">
+              <p className="text-text-tertiary text-sm">No recent runs</p>
+            </div>
+          )}
         </div>
-
-        {recentRuns.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-800 text-[10px] text-gray-500 uppercase tracking-wider">
-                  <th className="text-left px-4 py-2.5 font-medium">Status</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Agent</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Started</th>
-                  <th className="text-right px-4 py-2.5 font-medium">Duration</th>
-                  <th className="text-right px-4 py-2.5 font-medium">Records Pulled</th>
-                  <th className="text-right px-4 py-2.5 font-medium">New Records</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Error</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentRuns.map((run) => {
-                  const duration =
-                    run.started_at && run.finished_at
-                      ? ((new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000).toFixed(1)
-                      : '--';
-                  const startedAgo = formatDistanceToNow(new Date(run.started_at), { addSuffix: true });
-
-                  return (
-                    <tr key={run.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
-                      <td className="px-4 py-2.5">{statusBadge(run.status)}</td>
-                      <td className="px-4 py-2.5">
-                        <span className="text-sm text-white capitalize">
-                          {run.agent_name.replace(/_/g, ' ')}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5 text-[12px] text-gray-400">{startedAgo}</td>
-                      <td className="px-4 py-2.5 text-right text-[12px] text-gray-400 font-mono">
-                        {duration}s
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-[12px] text-gray-400 font-mono">
-                        {run.records_pulled}
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-[12px] text-white font-mono font-medium">
-                        {run.records_new}
-                      </td>
-                      <td className="px-4 py-2.5 text-[11px] text-red-400 max-w-[200px] truncate">
-                        {run.error_message || '--'}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="px-4 py-8 text-center">
-            <p className="text-gray-500 text-sm">No recent runs</p>
-          </div>
-        )}
-      </div>
+      </section>
     </div>
   );
 }

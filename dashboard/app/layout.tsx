@@ -6,11 +6,20 @@ import Navbar from '@/components/Navbar';
 const inter = Inter({
   variable: '--font-inter',
   subsets: ['latin'],
+  display: 'swap',
 });
 
 export const metadata: Metadata = {
-  title: 'The Bullpen — Texas CRE Intelligence',
-  description: 'AI agent platform for Texas commercial real estate intelligence',
+  title: 'The Bullpen — HarborCap',
+  description: 'Texas CRE intelligence platform — autonomous agents pulling live signals from public data sources.',
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/favicon-32x32.png', sizes: '32x32', type: 'image/png' },
+      { url: '/favicon-16x16.png', sizes: '16x16', type: 'image/png' },
+    ],
+    apple: '/apple-touch-icon.png',
+  },
 };
 
 export default function RootLayout({
@@ -20,11 +29,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${inter.variable} h-full`}>
-      <body className="min-h-full bg-gray-950 text-white font-[family-name:var(--font-inter)] antialiased">
+      <body className="min-h-full text-text-primary antialiased">
         <div className="flex min-h-screen">
           <Navbar />
-          <main className="flex-1 md:ml-0 mt-14 md:mt-0">
-            <div className="p-4 md:p-6 lg:p-8">{children}</div>
+          <main className="flex-1 mt-14 md:mt-0 page-shell">
+            <div className="px-4 py-5 md:px-8 md:py-7 lg:px-10 lg:py-8 max-w-[1600px] mx-auto">
+              {children}
+            </div>
           </main>
         </div>
       </body>

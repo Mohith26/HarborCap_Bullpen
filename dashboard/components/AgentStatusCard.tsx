@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { AgentHealth } from '@/lib/types';
 import { formatDistanceToNow } from 'date-fns';
+import { getAgent, CATEGORY_COLORS } from '@/lib/theme';
 
 const SCHEDULER_API = process.env.NEXT_PUBLIC_SCHEDULER_API_URL || '';
 
@@ -12,9 +13,9 @@ function cronToLabel(cron: string): string {
   const [min, hour, dom, , dow] = parts;
 
   if (min === '0' && hour === '*') return 'Hourly';
-  if (dom !== '*' && dow === '*') return `Monthly ${dom === '1' ? '1st' : `${dom}th`} ${hour}:${min.padStart(2, '0')} CT`;
-  if (dow !== '*') return `Weekly Mon ${hour}:${min.padStart(2, '0')} CT`;
-  if (hour !== '*') return `Daily ${hour}:${min.padStart(2, '0')} CT`;
+  if (dom !== '*' && dow === '*') return `${dom === '1' ? '1st' : `${dom}th`} of month · ${hour}:${min.padStart(2, '0')} CT`;
+  if (dow !== '*') return `Mondays · ${hour}:${min.padStart(2, '0')} CT`;
+  if (hour !== '*') return `Daily · ${hour}:${min.padStart(2, '0')} CT`;
   return cron;
 }
 
@@ -23,8 +24,10 @@ interface Props {
   onRunComplete?: () => void;
 }
 
+type TriggerStatus = 'idle' | 'starting' | 'running' | 'completed' | 'already_running' | 'error';
+
 export default function AgentStatusCard({ agent, onRunComplete }: Props) {
-  const [triggerStatus, setTriggerStatus] = useState<'idle' | 'starting' | 'running' | 'completed' | 'already_running' | 'error'>('idle');
+  const [triggerStatus, setTriggerStatus] = useState<TriggerStatus>('idle');
   const [triggerMessage, setTriggerMessage] = useState('');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -46,9 +49,8 @@ export default function AgentStatusCard({ agent, onRunComplete }: Props) {
 
       if (resp.ok) {
         setTriggerStatus('running');
-        setTriggerMessage('Agent running...');
+        setTriggerMessage('Agent running…');
 
-        // Poll for completion every 3 seconds, max 5 minutes
         let polls = 0;
         pollRef.current = setInterval(async () => {
           polls++;
@@ -72,9 +74,7 @@ export default function AgentStatusCard({ agent, onRunComplete }: Props) {
                 setTimeout(() => { setTriggerStatus('idle'); setTriggerMessage(''); }, 4000);
               }
             }
-          } catch {
-            // Poll failed — keep trying
-          }
+          } catch { /* keep polling */ }
         }, 3000);
 
       } else if (resp.status === 409) {
@@ -94,28 +94,35 @@ export default function AgentStatusCard({ agent, onRunComplete }: Props) {
     }
   };
 
+  const meta = getAgent(agent.agent_name);
+  const catColor = CATEGORY_COLORS[meta.category];
+
   const successRate = agent.total_runs > 0 ? Math.round((agent.successful / agent.total_runs) * 100) : 0;
   const lastRunAgo = agent.last_run
     ? formatDistanceToNow(new Date(agent.last_run), { addSuffix: true })
     : 'Never';
   const isHealthy = agent.failed === 0 || successRate >= 80;
-  const displayName = agent.agent_name.replace(/_/g, ' ');
 
   const nextRunLabel = agent.next_run
     ? formatDistanceToNow(new Date(agent.next_run), { addSuffix: true })
     : null;
   const scheduleLabel = agent.cron ? cronToLabel(agent.cron) : null;
 
-  const buttonColor =
-    triggerStatus === 'completed' ? 'bg-green-900/40 text-green-400 border-green-800' :
-    triggerStatus === 'running' ? 'bg-blue-900/40 text-blue-400 border-blue-800 animate-pulse' :
-    triggerStatus === 'already_running' ? 'bg-yellow-900/40 text-yellow-400 border-yellow-800' :
-    triggerStatus === 'error' ? 'bg-red-900/40 text-red-400 border-red-800' :
-    'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700 hover:text-white';
+  // Hide 0.0s — show "—" instead
+  const durationDisplay = agent.avg_duration_seconds > 0.05
+    ? `${agent.avg_duration_seconds.toFixed(1)}s`
+    : '—';
+
+  const buttonStyle: React.CSSProperties =
+    triggerStatus === 'completed' ? { background: 'rgba(91, 217, 168, 0.12)', borderColor: 'rgba(91, 217, 168, 0.4)', color: '#5BD9A8' } :
+    triggerStatus === 'running' ? { background: 'rgba(91, 156, 255, 0.12)', borderColor: 'rgba(91, 156, 255, 0.4)', color: '#5B9CFF' } :
+    triggerStatus === 'already_running' ? { background: 'rgba(255, 189, 96, 0.12)', borderColor: 'rgba(255, 189, 96, 0.4)', color: '#FFBD60' } :
+    triggerStatus === 'error' ? { background: 'rgba(229, 75, 75, 0.12)', borderColor: 'rgba(229, 75, 75, 0.4)', color: '#FF8585' } :
+    {};
 
   const buttonText =
-    triggerStatus === 'starting' ? 'Starting...' :
-    triggerStatus === 'running' ? 'Running...' :
+    triggerStatus === 'starting' ? 'Starting…' :
+    triggerStatus === 'running' ? 'Running…' :
     triggerStatus === 'completed' ? 'Completed' :
     triggerStatus === 'already_running' ? 'Already Running' :
     triggerStatus === 'error' ? 'Failed' :
@@ -124,88 +131,96 @@ export default function AgentStatusCard({ agent, onRunComplete }: Props) {
   const isDisabled = triggerStatus === 'starting' || triggerStatus === 'running' || !SCHEDULER_API;
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 hover:border-gray-700 transition-colors">
+    <div className="surface p-4 flex flex-col gap-4">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <span
-            className={`w-2.5 h-2.5 rounded-full ${
-              isHealthy ? 'bg-green-500' : 'bg-red-500'
-            }`}
-          />
-          <h3 className="text-sm font-semibold text-white capitalize">{displayName}</h3>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3 min-w-0 flex-1">
+          <div
+            className="shrink-0 w-9 h-9 rounded-lg flex items-center justify-center text-[10px] font-bold tracking-wider"
+            style={{
+              background: `${catColor}1A`,
+              color: catColor,
+              border: `1px solid ${catColor}33`,
+            }}
+          >
+            {meta.short}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isHealthy ? 'bg-[#5BD9A8]' : 'bg-[#E54B4B]'}`} />
+              <h3 className="text-[13.5px] font-semibold text-text-primary truncate">
+                {meta.label}
+              </h3>
+            </div>
+            <p className="text-[10px] text-text-tertiary uppercase tracking-wider truncate">
+              {meta.category}
+            </p>
+          </div>
         </div>
-        <span className={`text-[11px] font-medium px-2 py-0.5 rounded ${
-          isHealthy
-            ? 'bg-green-900/40 text-green-400 border border-green-800'
-            : 'bg-red-900/40 text-red-400 border border-red-800'
-        }`}>
-          {isHealthy ? 'Healthy' : 'Degraded'}
-        </span>
       </div>
 
-      {/* Stats grid */}
-      <div className="grid grid-cols-2 gap-3 mb-4">
+      {/* Stats grid — labels shortened to avoid truncation */}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
         <div>
-          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Total Runs (7d)</p>
-          <p className="text-lg font-semibold text-white">{agent.total_runs}</p>
+          <p className="text-[9px] font-semibold text-text-tertiary uppercase tracking-wider">Runs · 7d</p>
+          <p className="text-lg font-semibold tabular-nums text-text-primary leading-tight">{agent.total_runs}</p>
         </div>
         <div>
-          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Success Rate</p>
-          <p className={`text-lg font-semibold ${successRate >= 80 ? 'text-green-400' : successRate >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
-            {successRate}%
+          <p className="text-[9px] font-semibold text-text-tertiary uppercase tracking-wider">Success</p>
+          <p
+            className="text-lg font-semibold tabular-nums leading-tight"
+            style={{
+              color: successRate >= 80 ? '#5BD9A8' : successRate >= 50 ? '#FFBD60' : '#E54B4B',
+            }}
+          >
+            {agent.total_runs > 0 ? `${successRate}%` : '—'}
           </p>
         </div>
         <div>
-          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Avg Duration</p>
-          <p className="text-lg font-semibold text-white">{agent.avg_duration_seconds.toFixed(1)}s</p>
+          <p className="text-[9px] font-semibold text-text-tertiary uppercase tracking-wider">Avg run</p>
+          <p className="text-lg font-semibold tabular-nums text-text-primary leading-tight">{durationDisplay}</p>
         </div>
         <div>
-          <p className="text-[10px] text-gray-500 uppercase tracking-wider">New Records</p>
-          <p className="text-lg font-semibold text-white">{agent.total_new_records}</p>
+          <p className="text-[9px] font-semibold text-text-tertiary uppercase tracking-wider">New rows</p>
+          <p className="text-lg font-semibold tabular-nums text-text-primary leading-tight">
+            {agent.total_new_records.toLocaleString()}
+          </p>
         </div>
       </div>
 
       {/* Success/failure bar */}
-      <div className="mb-3">
-        <div className="flex h-2 rounded-full overflow-hidden bg-gray-800">
+      <div>
+        <div className="flex h-1 rounded-full overflow-hidden bg-[var(--input-bg)]">
           {agent.total_runs > 0 && (
             <>
-              <div className="bg-green-500 transition-all" style={{ width: `${successRate}%` }} />
-              <div className="bg-red-500 transition-all" style={{ width: `${100 - successRate}%` }} />
+              <div className="bg-[#5BD9A8] transition-all" style={{ width: `${successRate}%` }} />
+              <div className="bg-[#E54B4B] transition-all" style={{ width: `${100 - successRate}%` }} />
             </>
           )}
         </div>
-        <div className="flex justify-between mt-1">
-          <span className="text-[10px] text-gray-500">{agent.successful} passed</span>
-          <span className="text-[10px] text-gray-500">{agent.failed} failed</span>
+        <div className="flex justify-between mt-1.5">
+          <span className="text-[9px] text-text-tertiary">{agent.successful} passed</span>
+          <span className="text-[9px] text-text-tertiary">{agent.failed} failed</span>
         </div>
       </div>
 
       {/* Schedule info */}
-      <div className="border-t border-gray-800 pt-3 space-y-1.5">
-        <div className="flex items-center justify-between">
-          <p className="text-[11px] text-gray-500">
-            Last run: <span className="text-gray-400">{lastRunAgo}</span>
+      <div className="border-t border-divider pt-3 space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[10.5px] text-text-tertiary truncate">
+            Last: <span className="text-text-secondary">{lastRunAgo}</span>
           </p>
           {scheduleLabel && (
-            <p className="text-[10px] text-gray-600">{scheduleLabel}</p>
+            <p className="text-[9px] text-text-tertiary uppercase tracking-wider truncate">{scheduleLabel}</p>
           )}
         </div>
-
         {nextRunLabel && (
-          <p className="text-[11px] text-gray-500">
-            Next run: <span className="text-blue-400">{nextRunLabel}</span>
+          <p className="text-[10.5px] text-text-tertiary">
+            Next: <span className="text-[var(--hc-peach)]">{nextRunLabel}</span>
           </p>
         )}
-
         {triggerMessage && (
-          <p className={`text-[10px] ${
-            triggerStatus === 'completed' ? 'text-green-400' :
-            triggerStatus === 'running' ? 'text-blue-400' :
-            triggerStatus === 'already_running' ? 'text-yellow-400' :
-            'text-red-400'
-          }`}>
+          <p className="text-[10px] font-medium" style={{ color: buttonStyle.color || 'var(--text-tertiary)' }}>
             {triggerMessage}
           </p>
         )}
@@ -215,7 +230,8 @@ export default function AgentStatusCard({ agent, onRunComplete }: Props) {
       <button
         onClick={handleRunNow}
         disabled={isDisabled}
-        className={`w-full mt-3 text-[11px] font-medium px-3 py-1.5 rounded border transition-colors ${buttonColor} disabled:opacity-40 disabled:cursor-not-allowed`}
+        className="w-full text-[11px] font-semibold px-3 py-2 rounded-lg border border-border bg-[var(--input-bg)] text-text-secondary hover:text-text-primary hover:border-border-strong transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+        style={buttonStyle.background ? buttonStyle : undefined}
         title={!SCHEDULER_API ? 'Set NEXT_PUBLIC_SCHEDULER_API_URL in env to enable' : `Trigger ${agent.agent_name} now`}
       >
         {buttonText}

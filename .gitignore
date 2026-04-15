@@ -19,3 +19,11 @@ node_modules/
 # OS
 .DS_Store
 *.pem
+
+# Local assets and test artifacts
+Logo Masters/
+*.playwright-mcp/
+.playwright-mcp/
+redesign-*.png
+0*-*.png
+scripts/test_results.md
