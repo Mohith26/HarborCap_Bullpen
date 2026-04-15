@@ -172,7 +172,7 @@ export default function AgentHealthPage() {
         <div className="surface overflow-hidden">
           {recentRuns.length > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full">
+              <table className="w-full min-w-[640px]">
                 <thead>
                   <tr className="border-b border-divider text-[9px] text-text-tertiary uppercase tracking-wider">
                     <th className="text-left px-4 py-3 font-semibold">Status</th>
@@ -181,7 +181,7 @@ export default function AgentHealthPage() {
                     <th className="text-right px-4 py-3 font-semibold">Duration</th>
                     <th className="text-right px-4 py-3 font-semibold">Pulled</th>
                     <th className="text-right px-4 py-3 font-semibold">New</th>
-                    <th className="text-left px-4 py-3 font-semibold">Error</th>
+                    <th className="text-left px-4 py-3 font-semibold hidden sm:table-cell">Error</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -210,7 +210,7 @@ export default function AgentHealthPage() {
                         <td className="px-4 py-2.5 text-right text-[11.5px] text-text-primary font-medium tabular-nums">
                           {run.records_new.toLocaleString()}
                         </td>
-                        <td className="px-4 py-2.5 text-[10.5px] text-[#FF8585] max-w-[200px] truncate">
+                        <td className="px-4 py-2.5 text-[10.5px] text-[#FF8585] max-w-[200px] truncate hidden sm:table-cell">
                           {run.error_message || '—'}
                         </td>
                       </tr>

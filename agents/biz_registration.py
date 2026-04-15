@@ -164,10 +164,21 @@ def store_and_signal_registrations(
     if not rows:
         return 0, 0
 
+    # Dedup by taxpayer_id — same taxpayer may appear multiple times in a
+    # single corridor (multiple locations per taxpayer) and the upsert
+    # will 500 on "ON CONFLICT DO UPDATE command cannot affect row a
+    # second time". Keep the first occurrence for each unique key.
+    by_key: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = row.get("taxpayer_id") or str(uuid.uuid4())
+        if key not in by_key:
+            by_key[key] = row
+    deduped = list(by_key.values())
+
     # Upsert in batches of 50 to avoid payload limits
     written = 0
-    for i in range(0, len(rows), 50):
-        batch = rows[i : i + 50]
+    for i in range(0, len(deduped), 50):
+        batch = deduped[i : i + 50]
         result = (
             client.table("business_registrations")
             .upsert(batch, on_conflict="taxpayer_id")
