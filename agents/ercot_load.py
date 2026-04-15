@@ -59,6 +59,18 @@ ZONE_LABELS: dict[str, str] = {
 # Tasks
 # ---------------------------------------------------------------------------
 
+# Force HTTP/1.1 with a browser user-agent — Railway's IPs sometimes get
+# 403'd by Cloudflare when using HTTP/2 or a generic python-httpx UA.
+_BROWSER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
+
+def _ercot_client() -> httpx.Client:
+    return httpx.Client(http2=False, timeout=60, headers={"User-Agent": _BROWSER_UA})
+
+
 @task(name="get_ercot_token", retries=2, retry_delay_seconds=10)
 def get_ercot_token() -> str:
     """Authenticate with ERCOT B2C via ROPC flow and return an access token."""
@@ -70,9 +82,10 @@ def get_ercot_token() -> str:
         "scope": f"{ERCOT_PUBLIC_CLIENT_ID} openid",
         "response_type": "token",
     }
-    resp = httpx.post(TOKEN_URL, data=payload, timeout=30)
-    resp.raise_for_status()
-    return resp.json()["access_token"]
+    with _ercot_client() as client:
+        resp = client.post(TOKEN_URL, data=payload)
+        resp.raise_for_status()
+        return resp.json()["access_token"]
 
 
 @task(name="fetch_load_data", retries=2, retry_delay_seconds=10)
@@ -85,32 +98,34 @@ def fetch_load_data(
     headers = {
         "Ocp-Apim-Subscription-Key": ERCOT_SUBSCRIPTION_KEY,
         "Authorization": f"Bearer {token}",
+        "User-Agent": _BROWSER_UA,
     }
 
     all_data: list[list] = []
     page = 1
 
-    while True:
-        params = {
-            "operatingDayFrom": date_from,
-            "operatingDayTo": date_to,
-            "size": "1000",
-            "page": str(page),
-        }
-        resp = httpx.get(LOAD_URL, headers=headers, params=params, timeout=60)
-        resp.raise_for_status()
-        body = resp.json()
+    with _ercot_client() as client:
+        while True:
+            params = {
+                "operatingDayFrom": date_from,
+                "operatingDayTo": date_to,
+                "size": "1000",
+                "page": str(page),
+            }
+            resp = client.get(LOAD_URL, headers=headers, params=params)
+            resp.raise_for_status()
+            body = resp.json()
 
-        records = body.get("data", [])
-        if not records:
-            break
+            records = body.get("data", [])
+            if not records:
+                break
 
-        all_data.extend(records)
+            all_data.extend(records)
 
-        meta = body.get("_meta", {})
-        if page >= meta.get("totalPages", 1):
-            break
-        page += 1
+            meta = body.get("_meta", {})
+            if page >= meta.get("totalPages", 1):
+                break
+            page += 1
 
     return all_data
 

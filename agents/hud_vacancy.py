@@ -208,48 +208,78 @@ def _create_vacancy_signal(
 
 @flow(name="hud_vacancy_agent", log_prints=True)
 def hud_vacancy_agent() -> dict[str, Any]:
-    """Orchestrate: fetch vacancy data for each target ZIP, process, signal, log."""
-    # ---- Credential gate ----
-    if not HUD_API_TOKEN:
-        print(
-            "HUD API token not configured. "
-            "Register at https://www.huduser.gov/hudapi/public/register"
-        )
-        return {"status": "skipped", "reason": "credentials_not_configured"}
+    """Orchestrate: fetch vacancy data for each target ZIP, process, signal, log.
 
+    NOTE: The public HUD USPS crosswalk endpoint does NOT return vacancy
+    data — it returns zip↔geography crosswalks. True vacancy data requires
+    a different HUD product (NCWM) which is gated behind org approval.
+    Until we're onboarded to that product, this agent logs a skipped run.
+    """
     total_pulled = 0
     total_new = 0
     errors: list[str] = []
+    status = "failed"
 
-    for zip_code in TARGET_ZIPS:
-        try:
-            print(f"Fetching vacancy data for ZIP {zip_code}...")
-            data = fetch_vacancy(zip_code)
-            records = data if isinstance(data, list) else data.get("data", [])
-            total_pulled += len(records)
+    try:
+        if not HUD_API_TOKEN:
+            print("HUD_API_TOKEN not configured — skipping.")
+            status = "failed"
+            errors.append("HUD_API_TOKEN not configured")
+            return {"status": "skipped", "reason": "credentials_not_configured"}
 
-            new_count = process_and_signal(data, zip_code)
-            total_new += new_count
-            print(f"  -> {new_count} rows upserted for {zip_code}")
+        for zip_code in TARGET_ZIPS:
+            try:
+                print(f"Fetching vacancy data for ZIP {zip_code}...")
+                data = fetch_vacancy(zip_code)
 
-            # Polite delay between API calls
-            time.sleep(1)
-        except Exception as exc:
-            print(f"  -> FAILED for {zip_code}: {exc}")
-            errors.append(f"{zip_code}: {exc}")
+                # The HUD /usps endpoint returns crosswalk data shaped as:
+                #   {"data": {"year": "2025", "quarter": "4", "results": [...]}}
+                # NOT actual vacancy records. Drill into .data.results.
+                if isinstance(data, dict) and isinstance(data.get("data"), dict):
+                    payload = data["data"]
+                    year = payload.get("year")
+                    quarter = payload.get("quarter")
+                    results = payload.get("results") or []
+                    # Promote year/quarter onto each result for process_and_signal
+                    records = [{**r, "year": year, "quarter": quarter} for r in results]
+                elif isinstance(data, list):
+                    records = data
+                else:
+                    records = []
 
-    status = "success" if not errors else ("success" if total_new > 0 else "failed")
-    log_agent_run(
-        agent_name=AGENT_NAME,
-        status=status,
-        records_pulled=total_pulled,
-        records_new=total_new,
-        error_message="; ".join(errors) if errors else None,
-    )
-    print(
-        f"Agent complete: {total_pulled} pulled, {total_new} new/updated, "
-        f"{len(errors)} errors"
-    )
+                total_pulled += len(records)
+                new_count = process_and_signal({"data": records}, zip_code)
+                total_new += new_count
+                print(f"  -> {new_count} rows upserted for {zip_code}")
+
+                time.sleep(1)
+            except Exception as exc:
+                print(f"  -> FAILED for {zip_code}: {exc}")
+                errors.append(f"{zip_code}: {exc}")
+
+        # Status: success if we wrote ANY data; otherwise failed so the
+        # dashboard surfaces the problem.
+        if total_new > 0:
+            status = "success"
+        elif total_pulled > 0 and not errors:
+            # Crosswalk-only response path — no vacancy data to write
+            status = "failed"
+            errors.append("HUD /usps returned crosswalk data only (no vacancy fields)")
+        else:
+            status = "failed"
+    except Exception as outer:
+        errors.append(f"flow-level: {outer}")
+        status = "failed"
+    finally:
+        log_agent_run(
+            agent_name=AGENT_NAME,
+            status=status,
+            records_pulled=total_pulled,
+            records_new=total_new,
+            error_message="; ".join(errors)[:500] if errors else None,
+        )
+        print(f"Agent complete: {total_pulled} pulled, {total_new} new, {len(errors)} errors, status={status}")
+
     return {
         "status": status,
         "pulled": total_pulled,
